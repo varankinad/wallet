@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wallet-ai",
+  "main": "index.js",
+  "compatibility_date": "2026-08-25",
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "ALLOWED_ORIGIN": "*"
+  }
+}
