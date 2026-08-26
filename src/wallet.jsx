@@ -1523,7 +1523,7 @@ function BottomNav({ tab, setTab }) {
       <div style={{ position: "relative", width: "90%", maxWidth: 460 }}>
         <div ref={barRef} className="nav-glass" style={{
           pointerEvents: "auto", width: "100%", background: "rgba(28,28,30,.78)", backdropFilter: "saturate(180%) blur(28px)", WebkitBackdropFilter: "saturate(180%) blur(28px)",
-          borderTop: `1px solid rgba(255,255,255,.08)`, display: "flex", alignItems: "center", justifyContent: "space-around",
+          borderTop: `1px solid rgba(255,255,255,.08)`, display: "flex", alignItems: "center", justifyContent: "center", gap: "6%",
           padding: "9px 8px calc(env(safe-area-inset-bottom, 8px) + 8px)", boxShadow: "0 -10px 30px rgba(0,0,0,.22)",
           clipPath: `path('${notchPath}')`, WebkitClipPath: `path('${notchPath}')`, borderRadius: "99px", marginBottom: "30px",
         }}>
