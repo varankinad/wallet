@@ -116,3 +116,8 @@ Workers AI имеет бесплатную дневную квоту, но эт�
 ## UI refresh
 
 Inter-first typography with SF Pro/system fallbacks, stronger hierarchy, saturated lime/blue/coral accents, deep graphite surfaces, subtle gradients, and touch-friendly controls based on the supplied mobile references.
+
+
+## Latest UI/OCR update
+
+The app uses an Apple-like glass UI, a center notch around the add button, editable amounts after OCR, and a more robust Gemma 4 vision request with a retry path.

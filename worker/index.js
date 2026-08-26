@@ -65,33 +65,39 @@ function publicFamily(family) {
 }
 
 async function handleAI(request, env) {
-  const body = await request.json();
+  const body = await request.json().catch(() => ({}));
   const { base64, mediaType, prompt } = body || {};
   if (!base64 || !mediaType || !prompt) return json({ error: "base64, mediaType and prompt are required" }, 400, request, env);
   if (!env.AI) return json({ error: "Workers AI binding is not configured" }, 500, request, env);
 
   const image = `data:${mediaType};base64,${base64}`;
-  const system = `Ты финансовый OCR/vision-помощник. Твоя задача — точно читать чеки, банковские скриншоты и экраны маркетплейсов. Не выдумывай числа. Верни только JSON по схеме. Если значение не видно, используй null/пустую строку. Для суммы выбирай именно сумму покупки/списания/оплаты, а не баланс, скидку, кешбэк, номер заказа или бонусы. Дата должна быть датой операции на изображении, а не текущей датой. JSON schema: ${JSON.stringify(JSON_SCHEMA)}`;
+  const system = `You are a meticulous financial OCR and vision assistant. Read text literally from the supplied image. Return only a JSON object. Never invent amounts. The user wants the actual transaction amount, not a balance, discount, cashback, bonus, order number, or pre-discount price. For Russian bank screenshots, identify labels such as Сумма, Списано, Оплачено, Перевод, Зачисление. For receipts identify ИТОГО / К ОПЛАТЕ. For marketplaces identify Итого / Оплачено / К оплате. If uncertain, return an empty items array.`;
 
-  let result;
-  try {
-    result = await env.AI.run(MODEL, {
+  const run = async (extraPrompt = "") => {
+    const result = await env.AI.run(MODEL, {
       messages: [
         { role: "system", content: system },
-        { role: "user", content: prompt },
+        { role: "user", content: `${prompt}\n\n${extraPrompt}` },
       ],
       image,
-      max_tokens: 1800,
-      temperature: 0.1,
-      response_format: { type: "json_object" },
+      max_tokens: 1200,
+      temperature: 0.0,
     });
-  } catch (error) {
-    const message = error?.message || "Workers AI error";
-    return json({ error: message, code: error?.code }, 502, request, env);
-  }
+    return result;
+  };
 
-  const text = typeof result?.response === "string" ? result.response : typeof result === "string" ? result : JSON.stringify(result?.response || result?.result || result);
-  return json({ text }, 200, request, env);
+  try {
+    let result = await run("Read the image carefully and return the JSON. Double-check the exact visible amount and transaction date.");
+    let text = typeof result?.response === "string" ? result.response : typeof result === "string" ? result : JSON.stringify(result?.response || result?.result || result);
+    // One retry if the model produced no useful JSON / no text.
+    if (!text || text === "{}" || text === "null") {
+      result = await run("Second pass: focus only on the transaction total and merchant. Return a single JSON object with items containing the most clearly visible actual payment amount.");
+      text = typeof result?.response === "string" ? result.response : typeof result === "string" ? result : JSON.stringify(result?.response || result?.result || result);
+    }
+    return json({ text }, 200, request, env);
+  } catch (error) {
+    return json({ error: error?.message || "Workers AI error", code: error?.code || null, model: MODEL }, 502, request, env);
+  }
 }
 
 async function handleFamily(request, env, url) {

@@ -44,15 +44,6 @@ function catColor(name) {
   const palette = ["#0A84FF", "#64D2FF", "#30D158", "#FFD60A", "#FF9F0A", "#FF375F", "#BF5AF2"];
   return palette[Math.abs(hash) % palette.length];
 }
-function tornEdgeClipPath(teeth = 16, toothHeight = 7) {
-  const points = [];
-  for (let i = 0; i <= teeth; i++) {
-    points.push(`${((i / teeth) * 100).toFixed(2)}% ${i % 2 === 0 ? "0px" : toothHeight + "px"}`);
-  }
-  points.push("100% 100%", "0% 100%");
-  return `polygon(${points.join(",")})`;
-}
-const TORN_CLIP = tornEdgeClipPath();
 function haptic() { try { navigator.vibrate && navigator.vibrate(10); } catch (e) {} }
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -114,34 +105,67 @@ async function prepareImage(file) {
 }
 
 // ---------- вызов ИИ для распознавания чека ----------
+function extractJsonObject(text) {
+  const raw = String(text || "").replace(/```json|```/gi, "").trim();
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  const candidate = first >= 0 && last > first ? raw.slice(first, last + 1) : raw;
+  return JSON.parse(candidate);
+}
+
 async function analyzeReceipt(base64, mediaType, existingCategories, txnType, merchantMap) {
   const catList = existingCategories.length ? existingCategories.join(", ") : "категорий пока нет";
   const kindWord = txnType === "income" ? "дохода" : "расхода";
   const mapEntries = Object.entries(merchantMap || {}).slice(0, 25);
   const mapHint = mapEntries.length ? mapEntries.map(([m, c]) => `${m} → ${c}`).join("; ") : "нет данных";
-  const prompt = `Ты помогаешь вести учёт личных финансов. На изображении может быть бумажный чек, скриншот банковского приложения, маркетплейса, электронный чек, экран оплаты или подтверждение перевода, связанное с записью ${kindWord}.
+  const prompt = `Ты — точный финансовый OCR и vision-анализатор. На изображении может быть бумажный чек, банковский скриншот, экран оплаты, электронный чек или заказ маркетплейса. Это ${kindWord}.
 
-Верни ТОЛЬКО JSON: {"date":"YYYY-MM-DD или null","merchant":"строка","items":[{"amount":число,"category":"строка","description":"строка"}]}
+Сначала внимательно прочитай ВСЕ видимые суммы и даты. Ничего не выдумывай.
 
-Правила:
-- Внимательно прочитай текст на изображении. Не угадывай сумму, если она видна.
-- Для банка бери сумму списания/зачисления, а не баланс, номер заказа, бонусы или кешбэк.
-- Для маркетплейса бери итоговую сумму оплаты/заказа.
-- Для длинного чека разделяй РАЗНОРОДНЫЕ товары по категориям; одинаковые товары можно объединить.
-- Если это один платёж, перевод или услуга — один объект items с общей суммой.
-- amount — число в рублях, без валюты и пробелов.
-- category — краткое название на русском (1-2 слова). Уже известные категории: [${catList}]. Соответствия магазин→категория: ${mapHint}.
-- merchant — магазин, сервис, банк/получатель или отправитель, если виден.
-- date — дата операции на изображении в YYYY-MM-DD. Если не видна — null. Не подставляй сегодняшнюю дату.
-- description — 2-5 слов.
-- Если уверенно распознать данные нельзя, верни items: [] и не выдумывай числа.
-- Никакого markdown и пояснений вне JSON.`;
-  const data = await callApi("/ai", { base64, mediaType, prompt });
-  const clean = String(data.text || "").replace(/```json|```/g, "").trim();
-  let parsed; try { parsed = JSON.parse(clean); } catch (e) { throw new Error("ИИ вернул некорректный JSON"); }
-  parsed.items = Array.isArray(parsed.items) ? parsed.items.filter((it) => Number.isFinite(Number(it.amount)) && Number(it.amount) > 0).map((it) => ({
-    amount: Number(it.amount), category: String(it.category || "Без категории"), description: String(it.description || "")
-  })) : [];
+Верни ТОЛЬКО один JSON-объект без markdown и без пояснений:
+{"date":"YYYY-MM-DD или null","merchant":"строка","items":[{"amount":число,"category":"строка","description":"строка"}]}
+
+КРИТИЧЕСКИ ВАЖНО:
+- amount — итоговая сумма фактической оплаты/списания/зачисления в рублях.
+- НЕ бери баланс карты, доступный остаток, номер заказа, бонусы, кешбэк, размер скидки или стоимость до скидки.
+- На банковском скриншоте ищи подписи «Сумма», «Списано», «Оплачено», «Перевод», «Зачисление» и используй соответствующее число.
+- На маркетплейсе ищи «Итого», «Оплата», «К оплате», «Сумма заказа».
+- На чеке ищи «ИТОГО», «К ОПЛАТЕ» или эквивалент.
+- date — дата САМОЙ ОПЕРАЦИИ с изображения, не сегодняшняя дата.
+- Если на чеке несколько товаров из разных смысловых категорий, раздели их на items. Если это один перевод/платёж/услуга — один item.
+- category — короткое русское название 1–2 слова. Известные категории: [${catList}]. Известные соответствия магазин→категория: ${mapHint}.
+- merchant — магазин, сервис, банк, отправитель или получатель, если виден.
+- description — 2–5 слов.
+- Если данных недостаточно, верни items: [] вместо выдуманных значений.`;
+
+  async function runVision(extra = "") {
+    const data = await callApi("/ai", { base64, mediaType, prompt: `${prompt}\n${extra}` });
+    const rawText = data?.text ?? data?.response ?? data?.result?.response ?? data?.result ?? "";
+    return extractJsonObject(rawText);
+  }
+
+  let parsed;
+  try {
+    parsed = await runVision("Особенно проверь, что amount — это реальная сумма операции, а не баланс или сумма до скидки.");
+  } catch (firstError) {
+    try {
+      parsed = await runVision("Повтори анализ изображения медленно и буквально по тексту. Если видна одна явная сумма покупки/списания — используй её.");
+    } catch (secondError) {
+      throw new Error(firstError?.message || "ИИ не смог разобрать изображение");
+    }
+  }
+
+  parsed.items = Array.isArray(parsed.items)
+    ? parsed.items.filter((it) => Number.isFinite(Number(it.amount)) && Number(it.amount) > 0).map((it) => ({
+      amount: Number(it.amount),
+      category: String(it.category || "Без категории"),
+      description: String(it.description || "")
+    }))
+    : [];
+  parsed.merchant = String(parsed.merchant || "");
+  parsed.date = parsed.date || null;
+
+  if (!parsed.items.length) throw new Error("Не удалось уверенно определить сумму. Проверьте изображение или введите сумму вручную.");
   return parsed;
 }
 
@@ -178,13 +202,12 @@ function Chip({ label, active, color, onClick, small }) {
     </button>
   );
 }
-function TornTop({ background }) { return <div style={{ height: 8, background, clipPath: TORN_CLIP, marginBottom: -1 }} />; }
 function FieldLabel({ children }) {
   return <div style={{ fontSize: 11.5, color: C.textFaint, fontWeight: 700, margin: "12px 2px 6px", letterSpacing: 0.3 }}>{children}</div>;
 }
 function inputStyle(mono) {
   return {
-    width: "100%", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 12,
+    width: "100%", maxWidth: "100%", minWidth: 0, boxSizing: "border-box", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 12,
     padding: "12px 14px", color: C.text, fontSize: mono ? 20 : 14,
     fontFamily: mono ? FONT_MONO : FONT_BODY, fontWeight: mono ? 700 : 500,
   };
@@ -669,6 +692,11 @@ export default function WalletApp() {
         @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         .fade-up { animation: fadeUp .22s ease; }
         .ios-material { backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px); }
+        .glass-card { background: linear-gradient(180deg, rgba(44,44,46,.72), rgba(28,28,30,.62)); border: 1px solid rgba(255,255,255,.09); box-shadow: 0 18px 40px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px); }
+        .wallet-field { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+        .wallet-field input, .wallet-field textarea, .wallet-field select { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+        .nav-glass { position: relative; }
+        .nav-notch { position: absolute; left: 50%; top: -18px; width: 84px; height: 34px; transform: translateX(-50%); border-radius: 0 0 42px 42px; background: rgba(0,0,0,.92); box-shadow: 0 -1px 0 rgba(255,255,255,.04); }
         @media (max-width: 380px) {
           .wallet-title { font-size: 27px !important; }
         }
@@ -774,7 +802,6 @@ function HomeTab({ balance, monthIncome, monthExpense, topCategories, recent, on
       )}
 
       <div style={{ margin: "20px 20px 0" }}>
-        <TornTop background={C.surface} />
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 16px 16px", padding: "4px 4px 8px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px 4px" }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.textDim }}>Последние операции</div>
@@ -962,8 +989,8 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
 
       {!batch && (
         <div className="fade-up" style={{ marginTop: 18, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <button onClick={onPickPhoto} disabled={aiLoading} style={{
-            minHeight: 150, padding: "18px 12px", borderRadius: 18,
+          <button onClick={onPickPhoto} disabled={aiLoading} className="glass-card" style={{
+            minHeight: 150, padding: "18px 12px", borderRadius: 20,
             border: `1.5px dashed ${aiLoading ? C.gold : C.border}`, background: C.surface,
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, cursor: aiLoading ? "default" : "pointer",
           }}>
@@ -976,8 +1003,8 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
             <div style={{ fontSize: 11, color: C.textFaint, textAlign: "center" }}>Чек или экран оплаты</div>
           </button>
 
-          <button onClick={onPickScreenshot} disabled={aiLoading} style={{
-            minHeight: 150, padding: "18px 12px", borderRadius: 18,
+          <button onClick={onPickScreenshot} disabled={aiLoading} className="glass-card" style={{
+            minHeight: 150, padding: "18px 12px", borderRadius: 20,
             border: `1.5px dashed ${aiLoading ? C.gold : C.border}`, background: C.surface,
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, cursor: aiLoading ? "default" : "pointer",
           }}>
@@ -1002,17 +1029,16 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
       )}
 
       {batch && (
-        <div className="fade-up" style={{ marginTop: 18 }}>
-          <TornTop background={C.surface} />
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 16px 16px", padding: 16 }}>
+        <div className="fade-up glass-card" style={{ marginTop: 18, borderRadius: 22, padding: 16, overflow: "hidden" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, color: C.gold, fontSize: 12, fontWeight: 700 }}>
-              <Sparkles size={13} /> {batch.merchant ? `Чек: ${batch.merchant}` : "Данные распознаны"} — проверьте
+              <Sparkles size={13} /> {batch.merchant ? `Чек: ${batch.merchant}` : "Данные распознаны"}
             </div>
+            <div style={{ fontSize: 11.5, color: C.textFaint, marginBottom: 6 }}>Проверьте распознанную сумму — её можно изменить вручную.</div>
             <FieldLabel>Дата</FieldLabel>
-            <input type="date" value={toDateInput(batch.date)} onChange={(e) => setBatch({ ...batch, date: fromDateInput(e.target.value) })} style={inputStyle(false)} />
+            <div className="wallet-field"><input type="date" value={toDateInput(batch.date)} onChange={(e) => setBatch({ ...batch, date: fromDateInput(e.target.value) })} style={inputStyle(false)} /></div>
 
             {batch.items.map((it, idx) => (
-              <div key={it.id} style={{ marginTop: 14, padding: 12, background: C.surface2, borderRadius: 12, border: `1px solid ${C.border}`, opacity: it.include ? 1 : 0.45 }}>
+              <div key={it.id} style={{ marginTop: 14, padding: 12, background: "rgba(44,44,46,.58)", borderRadius: 14, border: `1px solid ${C.border}`, opacity: it.include ? 1 : 0.45 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <div style={{ fontSize: 11.5, color: C.textFaint, fontWeight: 700 }}>Позиция {idx + 1}</div>
                   <div style={{ display: "flex", gap: 8 }}>
@@ -1024,14 +1050,14 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
                     </button>
                   </div>
                 </div>
-                <input type="number" placeholder="Сумма" value={it.amount} onChange={(e) => updateBatchItem(it.id, { amount: e.target.value })} style={{ ...inputStyle(true), fontSize: 16, marginBottom: 8 }} />
+                <input type="number" placeholder="Сумма · можно исправить" value={it.amount} onChange={(e) => updateBatchItem(it.id, { amount: e.target.value })} style={{ ...inputStyle(true), fontSize: 16, marginBottom: 8 }} className="wallet-field" />
                 {categories.length > 0 && (
                   <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 8, paddingBottom: 2 }}>
                     {categories.map((c) => <Chip key={c} small label={c} active={it.category === c} color={color} onClick={() => updateBatchItem(it.id, { category: c })} />)}
                   </div>
                 )}
-                <input type="text" placeholder="Категория" value={it.category} onChange={(e) => updateBatchItem(it.id, { category: e.target.value })} style={{ ...inputStyle(false), marginBottom: 8 }} />
-                <input type="text" placeholder="Описание" value={it.description} onChange={(e) => updateBatchItem(it.id, { description: e.target.value })} style={inputStyle(false)} />
+                <input type="text" placeholder="Категория" value={it.category} onChange={(e) => updateBatchItem(it.id, { category: e.target.value })} style={{ ...inputStyle(false), marginBottom: 8 }} className="wallet-field" />
+                <input type="text" placeholder="Описание" value={it.description} onChange={(e) => updateBatchItem(it.id, { description: e.target.value })} style={inputStyle(false)} className="wallet-field" />
               </div>
             ))}
 
@@ -1067,7 +1093,7 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
           </div>
 
           <FieldLabel>Сумма, ₽</FieldLabel>
-          <input type="number" placeholder="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} style={inputStyle(true)} />
+          <input type="number" placeholder="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} style={inputStyle(true)} className="wallet-field" />
 
           <FieldLabel>Категория</FieldLabel>
           {!customMode && (
@@ -1084,7 +1110,7 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
           )}
 
           <FieldLabel>Описание (необязательно)</FieldLabel>
-          <input type="text" placeholder="Что это было?" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} style={inputStyle(false)} />
+          <input type="text" placeholder="Что это было?" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} style={inputStyle(false)} className="wallet-field" />
 
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontSize: 13, color: C.textDim, cursor: "pointer" }}>
             <input type="checkbox" checked={wantRecurring} onChange={(e) => setWantRecurring(e.target.checked)} />
@@ -1432,19 +1458,20 @@ function FamilyTab({ family, familyTx, familyMembers, familyLoading, onCreate, o
 // ---------- нижняя навигация ----------
 function BottomNav({ tab, setTab }) {
   return (
-    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center" }}>
-      <div style={{
-        width: "100%", maxWidth: 460, background: "rgba(28,28,30,0.88)", backdropFilter: "saturate(180%) blur(24px)", WebkitBackdropFilter: "saturate(180%) blur(24px)",
-        borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-around",
-        padding: "8px 8px calc(env(safe-area-inset-bottom, 8px) + 6px)",
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none", zIndex: 150 }}>
+      <div className="nav-glass" style={{
+        pointerEvents: "auto", width: "100%", maxWidth: 460, background: "rgba(28,28,30,.78)", backdropFilter: "saturate(180%) blur(28px)", WebkitBackdropFilter: "saturate(180%) blur(28px)",
+        borderTop: `1px solid rgba(255,255,255,.08)`, display: "flex", alignItems: "center", justifyContent: "space-around",
+        padding: "9px 8px calc(env(safe-area-inset-bottom, 8px) + 8px)", boxShadow: "0 -10px 30px rgba(0,0,0,.22)"
       }}>
+        <div className="nav-notch" />
         <NavItem icon={<WalletIcon size={19} />} label="Обзор" active={tab === "home"} onClick={() => setTab("home")} />
         <NavItem icon={<Search size={19} />} label="История" active={tab === "history"} onClick={() => setTab("history")} />
-        <button onClick={() => setTab("add")} style={{
-          width: 52, height: 52, borderRadius: 99, border: "none", background: C.gold, display: "flex",
-          alignItems: "center", justifyContent: "center", marginTop: -24, boxShadow: "0 8px 24px rgba(10,132,255,0.28), inset 0 1px 0 rgba(255,255,255,0.18)", cursor: "pointer", flexShrink: 0,
+        <button aria-label="Добавить операцию" onClick={() => setTab("add")} style={{
+          position: "relative", zIndex: 2, width: 58, height: 58, marginTop: -30, borderRadius: 99, border: `1px solid rgba(255,255,255,.16)`, background: C.blue,
+          display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 10px 30px rgba(10,132,255,.38), inset 0 1px 0 rgba(255,255,255,.25)", cursor: "pointer", flexShrink: 0,
         }}>
-          <Plus size={22} color="#0B0C10" strokeWidth={2.5} />
+          <Plus size={23} color="#fff" strokeWidth={2.6} />
         </button>
         <NavItem icon={<PieChart size={19} />} label="Аналитика" active={tab === "stats"} onClick={() => setTab("stats")} />
         <NavItem icon={<Users size={19} />} label="Семья" active={tab === "family"} onClick={() => setTab("family")} />
