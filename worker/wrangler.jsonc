@@ -1,11 +1,18 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "wallet-ai",
-  "main": "index.js",
-  "compatibility_date": "2026-08-26",
-  "ai": { "binding": "AI" },
-  "kv_namespaces": [
-    { "binding": "FAMILY_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }
-  ],
-  "vars": { "ALLOWED_ORIGIN": "*" }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "wallet-ai",
+	"main": "index.js",
+	"compatibility_date": "2026-08-26",
+	"ai": {
+		"binding": "AI"
+	},
+	"kv_namespaces": [
+		{
+			"binding": "FAMILY_KV",
+			"id": "3b7b9c6669064546b456a7d839e42a1d"
+		}
+	],
+	"vars": {
+		"ALLOWED_ORIGIN": "*"
+	}
 }
