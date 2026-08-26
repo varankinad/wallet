@@ -18,9 +18,9 @@ const C = {
   text: "#F2F2F7",
   textDim: "#98989D",
   textFaint: "#636366",
-  income: "#30D158",
+  income: "#2dc152",
   incomeDim: "rgba(48,209,88,0.16)",
-  expense: "#FF453A",
+  expense: "#f8362b",
   expenseDim: "rgba(255,69,58,0.16)",
   gold: "#0A84FF",
   goldDim: "rgba(10,132,255,0.16)",
@@ -120,7 +120,7 @@ async function analyzeReceipt(base64, mediaType, existingCategories, txnType, me
   const mapHint = mapEntries.length ? mapEntries.map(([m, c]) => `${m} → ${c}`).join("; ") : "нет данных";
   const prompt = `Ты — точный финансовый OCR и vision-анализатор. На изображении может быть бумажный чек, банковский скриншот, экран оплаты, электронный чек или заказ маркетплейса. Это ${kindWord}.
 
-Сначала внимательно прочитай ВСЕ видимые суммы и даты. Ничего не выдумывай.
+Сначала внимательно прочитай ВСЕ видимые суммы особенно (если есть Р или ₽) и даты. Ничего не выдумывай.
 
 Верни ТОЛЬКО один JSON-объект без markdown и без пояснений:
 {"date":"YYYY-MM-DD или null","merchant":"строка","items":[{"amount":число,"category":"строка","description":"строка"}]}
@@ -129,7 +129,7 @@ async function analyzeReceipt(base64, mediaType, existingCategories, txnType, me
 - amount — итоговая сумма фактической оплаты/списания/зачисления в рублях.
 - НЕ бери баланс карты, доступный остаток, номер заказа, бонусы, кешбэк, размер скидки или стоимость до скидки.
 - На банковском скриншоте ищи подписи «Сумма», «Списано», «Оплачено», «Перевод», «Зачисление» и используй соответствующее число.
-- На маркетплейсе ищи «Итого», «Оплата», «К оплате», «Сумма заказа».
+- На маркетплейсе ищи «Итого», «Оплата», «К оплате», «Сумма заказа», «Р», «₽».
 - На чеке ищи «ИТОГО», «К ОПЛАТЕ» или эквивалент.
 - date — дата САМОЙ ОПЕРАЦИИ с изображения, не сегодняшняя дата.
 - Если на чеке несколько товаров из разных смысловых категорий, раздели их на items. Если это один перевод/платёж/услуга — один item.
@@ -1080,7 +1080,6 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
               <button onClick={() => setBatch(null)} style={{ ...btnStyle, flex: 1, background: C.surface2, color: C.textDim, border: `1px solid ${C.border}` }}><X size={15} /> Отмена</button>
               <button onClick={confirmBatch} style={{ ...btnStyle, flex: 2, background: color, color: "#0B0C10" }}><Check size={15} /> Добавить</button>
             </div>
-          </div>
         </div>
       )}
 
