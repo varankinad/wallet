@@ -660,7 +660,7 @@ export default function WalletApp() {
   const recent = useMemo(() => [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8), [transactions]);
   function categoriesFor(t) { return Array.from(new Set(transactions.filter((x) => x.type === t).map((x) => x.category))).filter(Boolean); }
 
-  const wrap = { minHeight: "100vh", background: "linear-gradient(180deg, #000000 0%, #08080A 42%, #000000 100%)", color: C.text, fontFamily: FONT_BODY, maxWidth: 460, margin: "0 auto", position: "relative", paddingBottom: 118, overflowX: "hidden" };
+  const wrap = { minHeight: "100vh", background: "linear-gradient(180deg, #000000 0%, #08080A 42%, #000000 100%)", color: C.text, fontFamily: FONT_BODY, maxWidth: 460, margin: "0 auto", position: "relative", paddingBottom: 156, overflowX: "hidden" };
 
   if (!loaded) {
     return (
@@ -695,8 +695,7 @@ export default function WalletApp() {
         .glass-card { background: linear-gradient(180deg, rgba(44,44,46,.72), rgba(28,28,30,.62)); border: 1px solid rgba(255,255,255,.09); box-shadow: 0 18px 40px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter: saturate(180%) blur(28px); -webkit-backdrop-filter: saturate(180%) blur(28px); }
         .wallet-field { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
         .wallet-field input, .wallet-field textarea, .wallet-field select { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
-        .nav-glass { position: relative; }
-        .nav-notch { position: absolute; left: 50%; top: -18px; width: 84px; height: 34px; transform: translateX(-50%); border-radius: 0 0 42px 42px; background: rgba(0,0,0,.92); box-shadow: 0 -1px 0 rgba(255,255,255,.04); }
+         .nav-glass { position: relative; isolation: isolate; }
         @media (max-width: 380px) {
           .wallet-title { font-size: 27px !important; }
         }
@@ -802,7 +801,7 @@ function HomeTab({ balance, monthIncome, monthExpense, topCategories, recent, on
       )}
 
       <div style={{ margin: "20px 20px 0" }}>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 16px 16px", padding: "4px 4px 8px" }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "16px", padding: "4px 4px 8px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px 4px" }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.textDim }}>Последние операции</div>
             <button onClick={goHistory} style={{ background: "none", border: "none", color: C.textFaint, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}>
@@ -1456,24 +1455,69 @@ function FamilyTab({ family, familyTx, familyMembers, familyLoading, onCreate, o
 
 // ---------- нижняя навигация ----------
 function BottomNav({ tab, setTab }) {
+  const barRef = useRef(null);
+  const [barWidth, setBarWidth] = useState(460);
+
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const measure = () => setBarWidth(el.offsetWidth || 460);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Настоящий вырез в самом баре (а не цветная накладка поверх стекла) —
+  // так дно капли всегда совпадает с реальным фоном, без контрастных "крыльев".
+  const cx = barWidth / 2;
+  const notchPath =
+    `M0,0 L${cx - 56},0 ` +
+    `C${cx - 43},0 ${cx - 40},26 ${cx - 29},34 ` +
+    `C${cx - 20},40 ${cx - 11},42 ${cx},42 ` +
+    `C${cx + 11},42 ${cx + 20},40 ${cx + 29},34 ` +
+    `C${cx + 40},26 ${cx + 43},0 ${cx + 56},0 ` +
+    `L${barWidth},0 L${barWidth},220 L0,220 Z`;
+  const rimPath =
+    `M${cx - 56},0 ` +
+    `C${cx - 43},0 ${cx - 40},26 ${cx - 29},34 ` +
+    `C${cx - 20},40 ${cx - 11},42 ${cx},42 ` +
+    `C${cx + 11},42 ${cx + 20},40 ${cx + 29},34 ` +
+    `C${cx + 40},26 ${cx + 43},0 ${cx + 56},0`;
+
   return (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none", zIndex: 150 }}>
-      <div className="nav-glass" style={{
-        pointerEvents: "auto", width: "100%", maxWidth: 460, background: "rgba(28,28,30,.78)", backdropFilter: "saturate(180%) blur(28px)", WebkitBackdropFilter: "saturate(180%) blur(28px)",
-        borderTop: `1px solid rgba(255,255,255,.08)`, display: "flex", alignItems: "center", justifyContent: "space-around",
-        padding: "9px 8px calc(env(safe-area-inset-bottom, 8px) + 8px)", boxShadow: "0 -10px 30px rgba(0,0,0,.22)"
-      }}>
-        <div className="nav-notch" />
-        <NavItem icon={<WalletIcon size={19} />} label="Обзор" active={tab === "home"} onClick={() => setTab("home")} />
-        <NavItem icon={<Search size={19} />} label="История" active={tab === "history"} onClick={() => setTab("history")} />
-        <button aria-label="Добавить операцию" onClick={() => setTab("add")} style={{
-          position: "relative", zIndex: 2, width: 58, height: 58, marginTop: -30, borderRadius: 99, border: `1px solid rgba(255,255,255,.16)`, background: C.blue,
-          display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 10px 30px rgba(10,132,255,.38), inset 0 1px 0 rgba(255,255,255,.25)", cursor: "pointer", flexShrink: 0,
+      <div style={{ position: "relative", width: "100%", maxWidth: 460 }}>
+        <div ref={barRef} className="nav-glass" style={{
+          pointerEvents: "auto", width: "100%", background: "rgba(28,28,30,.78)", backdropFilter: "saturate(180%) blur(28px)", WebkitBackdropFilter: "saturate(180%) blur(28px)",
+          borderTop: `1px solid rgba(255,255,255,.08)`, display: "flex", alignItems: "center", justifyContent: "space-around",
+          padding: "9px 8px calc(env(safe-area-inset-bottom, 8px) + 8px)", boxShadow: "0 -10px 30px rgba(0,0,0,.22)",
+          clipPath: `path('${notchPath}')`, WebkitClipPath: `path('${notchPath}')`,
         }}>
-          <Plus size={23} color="#fff" strokeWidth={2.6} />
+          <NavItem icon={<WalletIcon size={19} />} label="Обзор" active={tab === "home"} onClick={() => setTab("home")} />
+          <NavItem icon={<Search size={19} />} label="История" active={tab === "history"} onClick={() => setTab("history")} />
+          <div style={{ width: 58, flexShrink: 0 }} aria-hidden="true" />
+          <NavItem icon={<PieChart size={19} />} label="Аналитика" active={tab === "stats"} onClick={() => setTab("stats")} />
+          <NavItem icon={<Users size={19} />} label="Семья" active={tab === "family"} onClick={() => setTab("family")} />
+        </div>
+
+        {/* Обводка и кнопка вынесены поверх неклипованным слоем, чтобы clip-path бара их не срезал */}
+        <svg
+          viewBox={`0 0 ${barWidth} 42`} width={barWidth} height={42}
+          style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", display: "block", overflow: "visible" }}
+        >
+          <path d={rimPath} fill="none" stroke="rgba(255,255,255,.14)" strokeWidth="1" />
+        </svg>
+        <button aria-label="Добавить операцию" onClick={() => setTab("add")} style={{
+          position: "absolute", left: "50%", top: -28, transform: "translateX(-50%)",
+          width: 58, height: 58, borderRadius: 99, border: `1px solid rgba(255,255,255,.22)`,
+          background: `#009dff`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "0 12px 28px rgba(10,132,255,.42),  inset 0 -8px 12px rgba(0,0,0,.28)",
+          cursor: "pointer", flexShrink: 0,
+        }}>
+          <Plus size={23} color="#fff" strokeWidth={2.6} style={{ filter: "drop-shadow(0 1px 1px rgba(0,0,0,.25))" }} />
         </button>
-        <NavItem icon={<PieChart size={19} />} label="Аналитика" active={tab === "stats"} onClick={() => setTab("stats")} />
-        <NavItem icon={<Users size={19} />} label="Семья" active={tab === "family"} onClick={() => setTab("family")} />
       </div>
     </div>
   );
