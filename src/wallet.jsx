@@ -267,7 +267,7 @@ function TxRow({ t, last, onDelete, onEdit }) {
   return (
     <div style={{ position: "relative", overflow: "hidden", borderBottom: last ? "none" : `1px dashed ${C.borderSoft}` }}>
       <div style={{
-        position: "absolute", right: 0, top: 0, bottom: 0, width: 88, background: C.expense,
+        position: "absolute", right: 0, top: 0, bottom: 0, width: 88,
         display: "flex", alignItems: "center", justifyContent: "center",
       }}
         onClick={() => { haptic(); onDelete(t); setDragX(0); }}>
@@ -319,12 +319,14 @@ function EditModal({ tx, onSave, onDelete, onClose, familyJoined }) {
   const [recurringFreq, setRecurringFreq] = useState(tx.recurringFreq || "monthly");
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 100,
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 300,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
     }} onClick={onClose}>
       <div className="fade-up" onClick={(e) => e.stopPropagation()} style={{
         width: "100%", maxWidth: 460, background: C.surface, borderTop: `1px solid ${C.border}`,
-        borderRadius: "20px 20px 0 0", padding: 20, maxHeight: "85vh", overflowY: "auto",
+        borderRadius: "20px 20px 0 0", padding: 20,
+        paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))",
+        maxHeight: "90dvh", overflowY: "auto",
       }}>
         <div style={{ width: 36, height: 4, borderRadius: 4, background: C.border, margin: "0 auto 16px" }} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
@@ -613,6 +615,25 @@ export default function WalletApp() {
     } catch (e) { showToast(e.message || "Не удалось синхронизировать семейную операцию"); }
   }
 
+  async function transferAllToFamily() {
+    if (!family.code || !deviceId || transactions.length === 0) return;
+    setFamilyLoading(true);
+    try {
+      let data;
+      for (const tx of transactions) {
+        data = await callApi("/family/tx", { code: family.code, deviceId, action: "upsert", transaction: {
+          localId: tx.id, owner: deviceId, authorId: family.memberId || deviceId, nickname: family.nickname || "Без имени",
+          type: tx.type, amount: Number(tx.amount), category: tx.category, description: tx.description, date: tx.date,
+        }});
+      }
+      setFamilyTx(data?.transactions || []);
+      setFamilyMembers(data?.members || familyMembers);
+      showToast(`Перенесено операций: ${transactions.length}`);
+    } catch (e) {
+      showToast(e.message || "Не удалось перенести все операции");
+    } finally { setFamilyLoading(false); }
+  }
+
   async function removeFamilyEntry(tx) {
     if (!family.code || !deviceId) return;
     try {
@@ -739,7 +760,8 @@ export default function WalletApp() {
       {tab === "family" && (
         <FamilyTab family={family} familyTx={familyTx} familyMembers={familyMembers} familyLoading={familyLoading}
           onCreate={createFamily} onJoin={joinFamily} onLeave={leaveFamily} onChangeAuthor={changeFamilyAuthor}
-          onRefresh={() => family.code && loadFamilyTx(family.code)} />
+          onRefresh={() => family.code && loadFamilyTx(family.code)} onTransferAll={transferAllToFamily}
+          localTransactionCount={transactions.length} />
       )}
 
       {editingTx && (
@@ -1097,7 +1119,7 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
           {!customMode && (
             <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 4 }}>
               {categories.map((c) => <Chip key={c} label={c} active={form.category === c} color={color} onClick={() => setForm({ ...form, category: c })} />)}
-              <Chip label="+ своя" active={false} color={C.gold} onClick={() => setCustomMode(true)} />
+              <Chip label="+" active={false} color={C.gold} onClick={() => setCustomMode(true)} />
             </div>
           )}
           {customMode && (
@@ -1325,7 +1347,7 @@ function CategoryBlock({ title, data, total, max, emptyText }) {
 }
 
 // ---------- вкладка "Семья" ----------
-function FamilyTab({ family, familyTx, familyMembers, familyLoading, onCreate, onJoin, onLeave, onChangeAuthor, onRefresh }) {
+function FamilyTab({ family, familyTx, familyMembers, familyLoading, onCreate, onJoin, onLeave, onChangeAuthor, onRefresh, onTransferAll, localTransactionCount }) {
   const [nickname, setNickname] = useState(family.nickname || "");
   const [joinCode, setJoinCode] = useState("");
   const [copied, setCopied] = useState(false);
@@ -1384,6 +1406,18 @@ function FamilyTab({ family, familyTx, familyMembers, familyLoading, onCreate, o
         <button onClick={async () => { try { await navigator.clipboard.writeText(family.code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} }}
           style={{ background: "none", border: "none", color: copied ? C.income : C.gold, cursor: "pointer" }}>
           <Copy size={15} />
+        </button>
+      </div>
+
+      <div style={{ marginBottom: 18, padding: 14, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Перенести личные операции</div>
+        <div style={{ fontSize: 12, color: C.textFaint, marginBottom: 10 }}>
+          Все операции будут добавлены в общий список. Повторный перенос не создаёт дубликаты.
+        </div>
+        <button onClick={onTransferAll} disabled={familyLoading || localTransactionCount === 0}
+          style={{ ...btnStyle, width: "100%", background: localTransactionCount > 0 && !familyLoading ? C.gold : C.surface2, color: localTransactionCount > 0 && !familyLoading ? "#0B0C10" : C.textFaint }}>
+          {familyLoading ? <Loader2 size={15} className="spin" /> : <Users size={15} />}
+          {familyLoading ? "Переносим…" : localTransactionCount > 0 ? `Перенести все операции (${localTransactionCount})` : "Нет операций для переноса"}
         </button>
       </div>
 
@@ -1468,55 +1502,70 @@ function BottomNav({ tab, setTab }) {
     return () => ro.disconnect();
   }, []);
 
-  // Настоящий вырез в самом баре (а не цветная накладка поверх стекла) —
-  // так дно капли всегда совпадает с реальным фоном, без контрастных "крыльев".
   const cx = barWidth / 2;
   const notchPath =
     `M0,0 L${cx - 56},0 ` +
-    `C${cx - 43},0 ${cx - 40},26 ${cx - 29},34 ` +
-    `C${cx - 20},40 ${cx - 11},42 ${cx},42 ` +
-    `C${cx + 11},42 ${cx + 20},40 ${cx + 29},34 ` +
-    `C${cx + 40},26 ${cx + 43},0 ${cx + 56},0 ` +
+    `C${cx - 43},0 ${cx - 40},20 ${cx - 29},30 ` +
+    `C${cx - 20},38 ${cx - 11},42 ${cx},42 ` +
+    `C${cx + 11},42 ${cx + 20},38 ${cx + 29},30 ` +
+    `C${cx + 40},20 ${cx + 43},0 ${cx + 56},0 ` +
     `L${barWidth},0 L${barWidth},220 L0,220 Z`;
   const rimPath =
     `M${cx - 56},0 ` +
-    `C${cx - 43},0 ${cx - 40},26 ${cx - 29},34 ` +
-    `C${cx - 20},40 ${cx - 11},42 ${cx},42 ` +
-    `C${cx + 11},42 ${cx + 20},40 ${cx + 29},34 ` +
-    `C${cx + 40},26 ${cx + 43},0 ${cx + 56},0`;
+    `C${cx - 43},0 ${cx - 40},20 ${cx - 29},30 ` +
+    `C${cx - 20},38 ${cx - 11},42 ${cx},42 ` +
+    `C${cx + 11},42 ${cx + 20},38 ${cx + 29},30 ` +
+    `C${cx + 40},20 ${cx + 43},0 ${cx + 56},0`;
+
 
   return (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none", zIndex: 150 }}>
-      <div style={{ position: "relative", width: "100%", maxWidth: 460 }}>
+      <div style={{ position: "relative", width: "90%", maxWidth: 460 }}>
         <div ref={barRef} className="nav-glass" style={{
           pointerEvents: "auto", width: "100%", background: "rgba(28,28,30,.78)", backdropFilter: "saturate(180%) blur(28px)", WebkitBackdropFilter: "saturate(180%) blur(28px)",
           borderTop: `1px solid rgba(255,255,255,.08)`, display: "flex", alignItems: "center", justifyContent: "space-around",
           padding: "9px 8px calc(env(safe-area-inset-bottom, 8px) + 8px)", boxShadow: "0 -10px 30px rgba(0,0,0,.22)",
-          clipPath: `path('${notchPath}')`, WebkitClipPath: `path('${notchPath}')`,
+          clipPath: `path('${notchPath}')`, WebkitClipPath: `path('${notchPath}')`, borderRadius: "99px", marginBottom: "30px",
         }}>
           <NavItem icon={<WalletIcon size={19} />} label="Обзор" active={tab === "home"} onClick={() => setTab("home")} />
           <NavItem icon={<Search size={19} />} label="История" active={tab === "history"} onClick={() => setTab("history")} />
-          <div style={{ width: 58, flexShrink: 0 }} aria-hidden="true" />
+          <div style={{ width: 50, flexShrink: 0 }} aria-hidden="true" />
           <NavItem icon={<PieChart size={19} />} label="Аналитика" active={tab === "stats"} onClick={() => setTab("stats")} />
           <NavItem icon={<Users size={19} />} label="Семья" active={tab === "family"} onClick={() => setTab("family")} />
         </div>
 
-        {/* Обводка и кнопка вынесены поверх неклипованным слоем, чтобы clip-path бара их не срезал */}
+        {/* Обводка поверх неклипованным слоем */}
         <svg
           viewBox={`0 0 ${barWidth} 42`} width={barWidth} height={42}
           style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", display: "block", overflow: "visible" }}
         >
           <path d={rimPath} fill="none" stroke="rgba(255,255,255,.14)" strokeWidth="1" />
         </svg>
+
+        {/* Кнопка + 50×50 с плавным дизайном */}
         <button aria-label="Добавить операцию" onClick={() => setTab("add")} style={{
-          position: "absolute", left: "50%", top: -28, transform: "translateX(-50%)",
-          width: 58, height: 58, borderRadius: 99, border: `1px solid rgba(255,255,255,.22)`,
-          background: `#009dff`,
+          position: "absolute", left: "50%", top: -22, transform: "translateX(-50%)",
+          width: 50, height: 50, borderRadius: 99, border: `1px solid rgba(255,255,255,.15)`,
+          background: `linear-gradient(135deg, #009dff, #0077d9)`,
           display: "flex", alignItems: "center", justifyContent: "center",
-          boxShadow: "0 12px 28px rgba(10,132,255,.42),  inset 0 -8px 12px rgba(0,0,0,.28)",
-          cursor: "pointer", flexShrink: 0,
-        }}>
-          <Plus size={23} color="#fff" strokeWidth={2.6} style={{ filter: "drop-shadow(0 1px 1px rgba(0,0,0,.25))" }} />
+          boxShadow: "0 8px 24px rgba(10,132,255,.4), inset 0 -4px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.15)",
+          cursor: "pointer", flexShrink: 0, pointerEvents: "auto",
+          transition: "transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s ease",
+        }}
+        onMouseDown={(e) => {
+          e.currentTarget.style.transform = "translateX(-50%) scale(0.92)";
+          e.currentTarget.style.boxShadow = "0 4px 12px rgba(10,132,255,.3), inset 0 -2px 4px rgba(0,0,0,.3)";
+        }}
+        onMouseUp={(e) => {
+          e.currentTarget.style.transform = "translateX(-50%) scale(1)";
+          e.currentTarget.style.boxShadow = "0 8px 24px rgba(10,132,255,.4), inset 0 -4px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.15)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = "translateX(-50%) scale(1)";
+          e.currentTarget.style.boxShadow = "0 8px 24px rgba(10,132,255,.4), inset 0 -4px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.15)";
+        }}
+        >
+          <Plus size={22} color="#fff" strokeWidth={3} style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.2))" }} />
         </button>
       </div>
     </div>
@@ -1524,8 +1573,9 @@ function BottomNav({ tab, setTab }) {
 }
 function NavItem({ icon, label, active, onClick }) {
   return (
-    <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, color: active ? C.gold : C.textFaint, cursor: "pointer", padding: 4 }}>
-      {icon}<span style={{ fontSize: 10, fontWeight: 700 }}>{label}</span>
+    <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, color: active ? C.gold : C.textFaint, cursor: "pointer", padding: 4, transition: "color .15s ease" }}>
+      {icon}
+      <span style={{ fontSize: 10, fontWeight: 700 }}>{label}</span>
     </button>
   );
 }
