@@ -1,39 +1,32 @@
 # Wallet — GitHub Pages + Cloudflare Workers AI
 
-React/Vite-приложение для учёта финансов. Фронтенд публикуется через GitHub Pages, а распознавание чеков и скриншотов выполняет отдельный Cloudflare Worker с Workers AI.
+Готовый React/Vite-проект личных финансов.
 
-## Архитектура
+## Что исправлено
 
-```text
-GitHub Pages
-  ↓
-React/Vite Wallet
-  ↓ POST image → Cloudflare Worker
-  ↓
-Workers AI — @cf/meta/llama-3.2-11b-vision-instruct
-  ↓ structured JSON
-Wallet
-```
+- Распознавание чеков, банковских скриншотов и маркетплейсов через Cloudflare Workers AI.
+- Используется `@cf/google/gemma-4-26b-a4b-it`: vision/OCR, в том числе многоязычный OCR и разбор экранов/документов.
+- Убран Anthropic.
+- Изображения перед отправкой уменьшаются до разумного размера для стабильного OCR.
+- AI возвращает JSON с датой, магазином и позициями.
+- Семейный бюджет теперь действительно синхронизируется между устройствами через Cloudflare KV.
+- Код приглашения проверяется на сервере.
+- Можно менять автора каждой операции в семейной ленте.
+- Старый локальный семейный код владельца можно автоматически перенести в серверное хранилище при первом запуске новой версии.
 
-Cloudflare Workers AI имеет бесплатную дневную квоту 10 000 Neurons. Конкретная стоимость зависит от модели и объёма inference; у используемой vision-модели есть бесплатная квота в рамках Workers AI Free. Проверь актуальные лимиты в Cloudflare Dashboard перед публичным запуском.
+## 1. Frontend / GitHub Pages
 
-## 1. GitHub Pages
+Репозиторий должен называться `wallet`, чтобы адрес был:
 
-Репозиторий рекомендуется назвать `wallet`. Тогда адрес:
+`https://ВАШ-ЛОГИН.github.io/wallet/`
 
-`https://YOUR-LOGIN.github.io/wallet/`
+В GitHub Pages выберите **GitHub Actions**.
 
-Vite уже настроен с `base: /wallet/`.
+Добавьте Secret:
 
-После push в `main` workflow `.github/workflows/deploy.yml` соберёт и опубликует `dist`.
+`VITE_API_URL=https://wallet-ai.ВАШ-SUBDOMAIN.workers.dev`
 
 ## 2. Cloudflare Worker
-
-Войдите в Cloudflare и откройте Workers & Pages → Workers AI.
-
-Первый запуск модели Llama 3.2 11B Vision требует принять лицензию Meta. Cloudflare показывает это требование при первом запросе модели.
-
-Установите Wrangler:
 
 ```bash
 cd worker
@@ -41,69 +34,85 @@ npm install
 npx wrangler login
 ```
 
-Деплой:
+Создайте KV namespace:
+
+```bash
+npx wrangler kv namespace create FAMILY_KV
+```
+
+Cloudflare вернёт ID вида:
+
+```text
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Откройте `worker/wrangler.jsonc` и замените:
+
+```json
+"REPLACE_WITH_KV_NAMESPACE_ID"
+```
+
+на полученный ID.
+
+После этого:
 
 ```bash
 npx wrangler deploy
 ```
 
-После деплоя получите URL вида:
+Worker должен получить URL вида:
 
-`https://wallet-ai.YOUR-SUBDOMAIN.workers.dev`
+`https://wallet-ai.ВАШ-SUBDOMAIN.workers.dev`
 
-### Ограничить CORS
+Именно этот URL укажите в GitHub Secret `VITE_API_URL`.
 
-После создания GitHub Pages сайта лучше заменить `ALLOWED_ORIGIN` в `worker/wrangler.jsonc`:
+## 3. Workers AI
+
+Worker использует binding `AI`:
 
 ```json
-"vars": {
-  "ALLOWED_ORIGIN": "https://YOUR-LOGIN.github.io"
-}
+"ai": { "binding": "AI" }
 ```
 
-Для первого теста оставлен `*`.
+и модель:
 
-## 3. Подключить Worker к GitHub Pages
+`@cf/google/gemma-4-26b-a4b-it`
 
-В GitHub → Settings → Secrets and variables → Actions добавьте Repository Secret:
+Эта модель поддерживает vision и OCR. Для неё не нужен отдельный шаг принятия Meta License, который требовался для старой Llama 3.2 Vision.
 
-`VITE_API_URL`
+## 4. Семейный бюджет
 
-Значение:
+API:
 
-`https://wallet-ai.YOUR-SUBDOMAIN.workers.dev`
+- `POST /family/create`
+- `POST /family/join`
+- `GET /family/:code?deviceId=...`
+- `POST /family/tx`
 
-Workflow уже передаёт этот secret в Vite при сборке.
+KV хранит участников и общие операции. Личные операции остаются в браузерном хранилище; в семейный список попадают только операции с флагом «Включить в семейный бюджет».
 
-После следующего push приложение будет использовать Cloudflare Worker.
+В семейной ленте у каждой операции есть выбор автора. Изменение автора не меняет владельца личной операции — оно меняет только автора в семейном бюджете.
 
-## 4. Локальный запуск
+## 5. Локальная проверка
 
 ```bash
 npm install
-npm run dev
-```
-
-Для production-сборки:
-
-```bash
 npm run build
 ```
 
-## 5. Проверка Worker
-
-После деплоя можно проверить:
+Для Worker:
 
 ```bash
-curl -X POST https://wallet-ai.YOUR-SUBDOMAIN.workers.dev \
-  -H 'Content-Type: application/json' \
-  -d '{"base64":"...","mediaType":"image/jpeg","prompt":"Верни JSON с датой, магазином и позициями покупки."}'
+cd worker
+npm install
+npx wrangler deploy
 ```
 
-## Важно
+## Важно про бесплатный тариф
 
-- Платный внешний AI API не нужен для распознавания.
-- Секреты Cloudflare не попадают во фронтенд.
-- Изображение отправляется напрямую из браузера в твой Worker.
-- Worker передаёт изображение в Workers AI и возвращает JSON.
-- Для чеков и скриншотов используется одна и та же vision-модель.
+Workers AI имеет бесплатную дневную квоту, но это не безлимитный AI. Если квота закончится, новые AI-запросы будут отклоняться до сброса лимита или перехода на Paid.
+
+
+## UI refresh
+
+Inter-first typography with SF Pro/system fallbacks, stronger hierarchy, saturated lime/blue/coral accents, deep graphite surfaces, subtle gradients, and touch-friendly controls based on the supplied mobile references.

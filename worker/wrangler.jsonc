@@ -2,11 +2,10 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wallet-ai",
   "main": "index.js",
-  "compatibility_date": "2026-08-25",
-  "ai": {
-    "binding": "AI"
-  },
-  "vars": {
-    "ALLOWED_ORIGIN": "*"
-  }
+  "compatibility_date": "2026-08-26",
+  "ai": { "binding": "AI" },
+  "kv_namespaces": [
+    { "binding": "FAMILY_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }
+  ],
+  "vars": { "ALLOWED_ORIGIN": "*" }
 }

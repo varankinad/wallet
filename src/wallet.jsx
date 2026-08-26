@@ -9,23 +9,29 @@ import { LineChart, Line, XAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 // ---------- палитра и токены ----------
 const C = {
-  bg: "#0B0C10",
-  surface: "#15171C",
-  surface2: "#1C1F26",
-  border: "#272A31",
-  borderSoft: "#1F2128",
-  text: "#F2F0EA",
-  textDim: "#93959D",
-  textFaint: "#5B5D64",
-  income: "#5FD3A3",
-  incomeDim: "rgba(95,211,163,0.13)",
-  expense: "#FF6B5C",
-  expenseDim: "rgba(255,107,92,0.13)",
-  gold: "#F2C879",
-  goldDim: "rgba(242,200,121,0.14)",
+  // Apple-like dark system palette: SF Pro, system materials, iOS semantic colors.
+  bg: "#000000",
+  surface: "#1C1C1E",
+  surface2: "#2C2C2E",
+  border: "#38383A",
+  borderSoft: "#2C2C2E",
+  text: "#F2F2F7",
+  textDim: "#98989D",
+  textFaint: "#636366",
+  income: "#30D158",
+  incomeDim: "rgba(48,209,88,0.16)",
+  expense: "#FF453A",
+  expenseDim: "rgba(255,69,58,0.16)",
+  gold: "#0A84FF",
+  goldDim: "rgba(10,132,255,0.16)",
+  blue: "#0A84FF",
+  blueDim: "rgba(10,132,255,0.16)",
+  purple: "#BF5AF2",
+  yellow: "#FFD60A",
+  cyan: "#64D2FF",
 };
-const FONT_BODY = "'Manrope', -apple-system, sans-serif";
-const FONT_MONO = "'Space Mono', 'SF Mono', monospace";
+const FONT_BODY = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif";
+const FONT_MONO = "ui-monospace, 'SF Mono', 'SF Mono Regular', Menlo, monospace";
 const MONTHS_RU = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
 
 // ---------- утилиты ----------
@@ -35,7 +41,8 @@ function catColor(name) {
   if (!name) return "#8D8F97";
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return `hsl(${Math.abs(hash) % 360}, 58%, 56%)`;
+  const palette = ["#0A84FF", "#64D2FF", "#30D158", "#FFD60A", "#FF9F0A", "#FF375F", "#BF5AF2"];
+  return palette[Math.abs(hash) % palette.length];
 }
 function tornEdgeClipPath(teeth = 16, toothHeight = 7) {
   const points = [];
@@ -68,42 +75,73 @@ function catBreakdown(list) {
 }
 function sameMonth(d, ref) { return d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear(); }
 
+// ---------- API ----------
+async function callApi(path, body, options = {}) {
+  const apiUrl = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+  if (!apiUrl) throw new Error("VITE_API_URL is not configured");
+  const method = options.method || "POST";
+  const requestOptions = {
+    method,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  };
+  if (method !== "GET" && method !== "HEAD") requestOptions.body = options.body === undefined ? JSON.stringify(body || {}) : options.body;
+  const response = await fetch(`${apiUrl}${path}`, requestOptions);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(data?.error || `API error ${response.status}`);
+    err.status = response.status; err.code = data?.code;
+    throw err;
+  }
+  return data;
+}
+
+async function prepareImage(file) {
+  if (!file.type.startsWith("image/")) throw new Error("Поддерживаются только изображения");
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = url;
+    });
+    const maxSide = 2200;
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+    const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+    const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+    const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+    return { base64: dataUrl.split(",")[1], mediaType: "image/jpeg" };
+  } finally { URL.revokeObjectURL(url); }
+}
+
 // ---------- вызов ИИ для распознавания чека ----------
 async function analyzeReceipt(base64, mediaType, existingCategories, txnType, merchantMap) {
   const catList = existingCategories.length ? existingCategories.join(", ") : "категорий пока нет";
   const kindWord = txnType === "income" ? "дохода" : "расхода";
   const mapEntries = Object.entries(merchantMap || {}).slice(0, 25);
-  const mapHint = mapEntries.length
-    ? mapEntries.map(([m, c]) => `${m} → ${c}`).join("; ")
-    : "нет данных";
-  const prompt = `Ты помогаешь вести учёт личных финансов. На фото — чек, экран оплаты, товар в магазине или подтверждение перевода, связанное с записью ${kindWord}.
-Верни ТОЛЬКО валидный JSON без markdown и пояснений, строго в формате:
-{"date": "YYYY-MM-DD или null", "merchant": "строка", "items": [{"amount": число, "category": "строка", "description": "строка"}]}
+  const mapHint = mapEntries.length ? mapEntries.map(([m, c]) => `${m} → ${c}`).join("; ") : "нет данных";
+  const prompt = `Ты помогаешь вести учёт личных финансов. На изображении может быть бумажный чек, скриншот банковского приложения, маркетплейса, электронный чек, экран оплаты или подтверждение перевода, связанное с записью ${kindWord}.
+
+Верни ТОЛЬКО JSON: {"date":"YYYY-MM-DD или null","merchant":"строка","items":[{"amount":число,"category":"строка","description":"строка"}]}
 
 Правила:
-- Если на чеке несколько РАЗНОРОДНЫХ по смыслу товаров (например, чек из супермаркета: продукты + бытовая химия) — раздели их на отдельные объекты в items, каждый со своей категорией. Если это один платёж/перевод/услуга — верни один объект в items с общей суммой.
+- Внимательно прочитай текст на изображении. Не угадывай сумму, если она видна.
+- Для банка бери сумму списания/зачисления, а не баланс, номер заказа, бонусы или кешбэк.
+- Для маркетплейса бери итоговую сумму оплаты/заказа.
+- Для длинного чека разделяй РАЗНОРОДНЫЕ товары по категориям; одинаковые товары можно объединить.
+- Если это один платёж, перевод или услуга — один объект items с общей суммой.
 - amount — число в рублях, без валюты и пробелов.
-- category — краткое название на русском (1-2 слова). Уже известные категории пользователя: [${catList}] — используй точно такое же написание, если подходит. Известные соответствия магазин→категория: ${mapHint}. Если для merchant есть известное соответствие — используй его. Если ничего не подходит — предложи новую короткую категорию.
-- merchant — название магазина/заведения/отправителя, если видно.
-- date — дата операции с чека в формате YYYY-MM-DD, если видна на фото, иначе null.
-- description — очень краткое описание (2-4 слова) для каждой позиции.
-Не оставляй числовые поля пустыми — дай наиболее вероятную оценку.`;
-
-  const apiUrl = import.meta.env.VITE_API_URL || "";
-  if (!apiUrl) throw new Error("VITE_API_URL is not configured");
-  const response = await fetch(apiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ base64, mediaType, prompt }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error || "AI API error");
-  const textBlocks = data.text || "";
-  const clean = textBlocks.replace(/```json|```/g, "").trim();
-  const parsed = JSON.parse(clean);
-  if (!parsed.items || !parsed.items.length) {
-    parsed.items = [{ amount: parsed.amount || "", category: parsed.category || "", description: parsed.description || parsed.merchant || "" }];
-  }
+- category — краткое название на русском (1-2 слова). Уже известные категории: [${catList}]. Соответствия магазин→категория: ${mapHint}.
+- merchant — магазин, сервис, банк/получатель или отправитель, если виден.
+- date — дата операции на изображении в YYYY-MM-DD. Если не видна — null. Не подставляй сегодняшнюю дату.
+- description — 2-5 слов.
+- Если уверенно распознать данные нельзя, верни items: [] и не выдумывай числа.
+- Никакого markdown и пояснений вне JSON.`;
+  const data = await callApi("/ai", { base64, mediaType, prompt });
+  const clean = String(data.text || "").replace(/```json|```/g, "").trim();
+  let parsed; try { parsed = JSON.parse(clean); } catch (e) { throw new Error("ИИ вернул некорректный JSON"); }
+  parsed.items = Array.isArray(parsed.items) ? parsed.items.filter((it) => Number.isFinite(Number(it.amount)) && Number(it.amount) > 0).map((it) => ({
+    amount: Number(it.amount), category: String(it.category || "Без категории"), description: String(it.description || "")
+  })) : [];
   return parsed;
 }
 
@@ -152,8 +190,9 @@ function inputStyle(mono) {
   };
 }
 const btnStyle = {
-  display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: "none",
-  borderRadius: 12, padding: "12px 0", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: FONT_BODY,
+  display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: "none",
+  borderRadius: 15, padding: "13px 0", fontWeight: 750, fontSize: 14, cursor: "pointer", fontFamily: FONT_BODY,
+  letterSpacing: "-0.01em", transition: "transform .16s ease, filter .16s ease, box-shadow .16s ease",
 };
 function StatCard({ icon, label, value, color }) {
   return (
@@ -335,6 +374,7 @@ export default function WalletApp() {
   const [family, setFamily] = useState({ code: null, nickname: "" });
   const [deviceId, setDeviceId] = useState(null);
   const [familyTx, setFamilyTx] = useState([]);
+  const [familyMembers, setFamilyMembers] = useState([]);
   const [familyLoading, setFamilyLoading] = useState(false);
 
   const [tab, setTab] = useState("home");
@@ -518,79 +558,71 @@ export default function WalletApp() {
 
   // ---------- семейный бюджет ----------
   async function loadFamilyTx(code) {
+    if (!code || !deviceId) return;
     setFamilyLoading(true);
     try {
-      if (window.storage?.get) {
-        const res = await window.storage.get(`family-tx:${code}`, true);
-        setFamilyTx(res ? JSON.parse(res.value) : []);
-      } else {
-        const raw = localStorage.getItem(`wallet:shared:family-tx:${code}`);
-        setFamilyTx(raw ? JSON.parse(raw) : []);
+      let data;
+      try {
+        data = await callApi(`/family/${encodeURIComponent(code)}?deviceId=${encodeURIComponent(deviceId)}`, null, { method: "GET" });
+      } catch (e) {
+        // Старые семейные коды были только локальными. Для владельца приложения
+        // автоматически переносим такой код в настоящее Cloudflare-хранилище.
+        if (e.status === 404 && family.nickname) {
+          data = await callApi("/family/ensure", { code, nickname: family.nickname, deviceId });
+          const next = { ...family, memberId: data.memberId };
+          setFamily(next); persistKey("family-settings", next);
+        } else throw e;
       }
-    } catch (e) { setFamilyTx([]); }
-    setFamilyLoading(false);
+      setFamilyTx(data.transactions || []); setFamilyMembers(data.members || []);
+    } catch (e) { setFamilyTx([]); setFamilyMembers([]); showToast(e.message || "Не удалось загрузить семейный бюджет"); }
+    finally { setFamilyLoading(false); }
   }
-  useEffect(() => { if (family.code) loadFamilyTx(family.code); }, [family.code]);
+  useEffect(() => { if (family.code && deviceId) loadFamilyTx(family.code); }, [family.code, deviceId]);
 
   async function syncFamilyEntry(tx) {
     if (!family.code || !deviceId) return;
     try {
-      let list = [];
-      if (window.storage?.get) {
-        const res = await window.storage.get(`family-tx:${family.code}`, true);
-        list = res ? JSON.parse(res.value) : [];
-      } else {
-        const raw = localStorage.getItem(`wallet:shared:family-tx:${family.code}`);
-        list = raw ? JSON.parse(raw) : [];
-      }
-      const idx = list.findIndex((e) => e.localId === tx.id && e.owner === deviceId);
-      const entry = {
-        id: idx >= 0 ? list[idx].id : deviceId + "-" + tx.id, localId: tx.id, owner: deviceId,
-        nickname: family.nickname || "Без имени", type: tx.type, amount: tx.amount,
-        category: tx.category, description: tx.description, date: tx.date,
-      };
-      if (idx >= 0) list[idx] = entry; else list.push(entry);
-      if (window.storage?.set) await window.storage.set(`family-tx:${family.code}`, JSON.stringify(list), true);
-      else localStorage.setItem(`wallet:shared:family-tx:${family.code}`, JSON.stringify(list));
-      setFamilyTx(list);
-    } catch (e) {}
+      const data = await callApi("/family/tx", { code: family.code, deviceId, action: "upsert", transaction: {
+        localId: tx.id, owner: deviceId, authorId: family.memberId || deviceId, nickname: family.nickname || "Без имени",
+        type: tx.type, amount: Number(tx.amount), category: tx.category, description: tx.description, date: tx.date
+      }});
+      setFamilyTx(data.transactions || []); setFamilyMembers(data.members || familyMembers);
+    } catch (e) { showToast(e.message || "Не удалось синхронизировать семейную операцию"); }
   }
+
   async function removeFamilyEntry(tx) {
     if (!family.code || !deviceId) return;
     try {
-      let list = [];
-      if (window.storage?.get) {
-        const res = await window.storage.get(`family-tx:${family.code}`, true);
-        list = res ? JSON.parse(res.value) : [];
-      } else {
-        const raw = localStorage.getItem(`wallet:shared:family-tx:${family.code}`);
-        list = raw ? JSON.parse(raw) : [];
-      }
-      list = list.filter((e) => !(e.localId === tx.id && e.owner === deviceId));
-      if (window.storage?.set) await window.storage.set(`family-tx:${family.code}`, JSON.stringify(list), true);
-      else localStorage.setItem(`wallet:shared:family-tx:${family.code}`, JSON.stringify(list));
-      setFamilyTx(list);
-    } catch (e) {}
+      const data = await callApi("/family/tx", { code: family.code, deviceId, action: "delete", localId: tx.id, owner: deviceId });
+      setFamilyTx(data.transactions || []);
+    } catch (e) { showToast(e.message || "Не удалось удалить семейную операцию"); }
   }
-  function createFamily(nickname) {
-    const code = Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
-    const next = { code, nickname };
-    setFamily(next);
-    persistKey("family-settings", next);
-    showToast("Семейный бюджет создан");
+
+  async function changeFamilyAuthor(txId, authorId) {
+    if (!family.code || !deviceId || !authorId) return;
+    try { const data = await callApi("/family/tx", { code: family.code, deviceId, action: "author", txId, authorId }); setFamilyTx(data.transactions || []); }
+    catch (e) { showToast(e.message || "Не удалось изменить автора"); }
   }
-  function joinFamily(code, nickname) {
-    const next = { code: code.trim().toUpperCase(), nickname };
-    setFamily(next);
-    persistKey("family-settings", next);
-    showToast("Вы присоединились к семейному бюджету");
+
+  async function createFamily(nickname) {
+    try {
+      const data = await callApi("/family/create", { nickname, deviceId });
+      const next = { code: data.code, nickname, memberId: data.memberId };
+      setFamily(next); setFamilyMembers(data.members || []); setFamilyTx([]); persistKey("family-settings", next); showToast("Семейный бюджет создан");
+    } catch (e) { showToast(e.message || "Не удалось создать семейный бюджет"); }
   }
+
+  async function joinFamily(code, nickname) {
+    try {
+      const normalized = code.trim().toUpperCase();
+      const data = await callApi("/family/join", { code: normalized, nickname, deviceId });
+      const next = { code: normalized, nickname, memberId: data.memberId };
+      setFamily(next); setFamilyMembers(data.members || []); setFamilyTx(data.transactions || []); persistKey("family-settings", next); showToast("Вы присоединились к семейному бюджету");
+    } catch (e) { showToast(e.message || "Код семейного бюджета не найден"); }
+  }
+
   function leaveFamily() {
-    const next = { code: null, nickname: family.nickname };
-    setFamily(next);
-    persistKey("family-settings", next);
-    setFamilyTx([]);
-    showToast("Вы вышли из семейного бюджета");
+    const next = { code: null, nickname: family.nickname }; setFamily(next); setFamilyMembers([]); setFamilyTx([]); persistKey("family-settings", next); showToast("Вы вышли из семейного бюджета");
   }
 
   // ---------- производные данные ----------
@@ -605,7 +637,7 @@ export default function WalletApp() {
   const recent = useMemo(() => [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8), [transactions]);
   function categoriesFor(t) { return Array.from(new Set(transactions.filter((x) => x.type === t).map((x) => x.category))).filter(Boolean); }
 
-  const wrap = { minHeight: "100vh", background: C.bg, color: C.text, fontFamily: FONT_BODY, maxWidth: 460, margin: "0 auto", position: "relative", paddingBottom: 110 };
+  const wrap = { minHeight: "100vh", background: "linear-gradient(180deg, #000000 0%, #08080A 42%, #000000 100%)", color: C.text, fontFamily: FONT_BODY, maxWidth: 460, margin: "0 auto", position: "relative", paddingBottom: 118, overflowX: "hidden" };
 
   if (!loaded) {
     return (
@@ -619,15 +651,30 @@ export default function WalletApp() {
   return (
     <div style={wrap}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
         * { box-sizing: border-box; }
-        input::placeholder { color: ${C.textFaint}; }
-        input { outline: none; }
+        html { background: #000; color-scheme: dark; }
+        body { margin: 0; background: #000; color: ${C.text}; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-variant-numeric: proportional-nums; }
+        button, input, select, textarea { font-family: ${FONT_BODY}; -webkit-tap-highlight-color: transparent; }
+        button { transition: transform .18s cubic-bezier(.2,.8,.2,1), opacity .18s ease, background-color .18s ease, box-shadow .18s ease; }
+        button:active { transform: scale(.985); }
+        button:disabled { cursor: default; opacity: .55; }
+        input::placeholder, textarea::placeholder { color: ${C.textFaint}; }
+        input, select, textarea { outline: none; }
+        input:focus, select:focus, textarea:focus { border-color: rgba(10,132,255,.78) !important; box-shadow: 0 0 0 3px rgba(10,132,255,.16); }
+        select { color-scheme: dark; }
+        ::selection { background: rgba(10,132,255,.35); color: ${C.text}; }
         ::-webkit-scrollbar { display: none; }
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        .fade-up { animation: fadeUp .25s ease; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-up { animation: fadeUp .22s ease; }
+        .ios-material { backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px); }
+        @media (max-width: 380px) {
+          .wallet-title { font-size: 27px !important; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+        }
       `}</style>
 
       {tab === "home" && (
@@ -663,8 +710,8 @@ export default function WalletApp() {
       )}
 
       {tab === "family" && (
-        <FamilyTab family={family} familyTx={familyTx} familyLoading={familyLoading}
-          onCreate={createFamily} onJoin={joinFamily} onLeave={leaveFamily}
+        <FamilyTab family={family} familyTx={familyTx} familyMembers={familyMembers} familyLoading={familyLoading}
+          onCreate={createFamily} onJoin={joinFamily} onLeave={leaveFamily} onChangeAuthor={changeFamilyAuthor}
           onRefresh={() => family.code && loadFamilyTx(family.code)} />
       )}
 
@@ -858,8 +905,8 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
     if (!file) return;
     setAiLoading(true); setAiError(""); setBatch(null);
     try {
-      const base64 = await fileToBase64(file);
-      const result = await analyzeReceipt(base64, file.type || "image/jpeg", categories, type, merchantMap);
+      const prepared = await prepareImage(file);
+      const result = await analyzeReceipt(prepared.base64, prepared.mediaType, categories, type, merchantMap);
       setBatch({
         date: result.date ? fromDateInput(result.date) : new Date().toISOString(),
         merchant: result.merchant || "",
@@ -870,7 +917,8 @@ function AddTab({ transactions, categoriesFor, merchantMap, familyJoined, onAddB
         })),
       });
     } catch (err) {
-      setAiError("Не удалось распознать чек. Попробуйте другое фото или введите данные вручную.");
+      const msg = err?.message || "Не удалось распознать изображение";
+      setAiError(msg.includes("VITE_API_URL") ? "Не настроен адрес AI Worker." : msg);
     } finally { setAiLoading(false); }
   }
 
@@ -1253,7 +1301,7 @@ function CategoryBlock({ title, data, total, max, emptyText }) {
 }
 
 // ---------- вкладка "Семья" ----------
-function FamilyTab({ family, familyTx, familyLoading, onCreate, onJoin, onLeave, onRefresh }) {
+function FamilyTab({ family, familyTx, familyMembers, familyLoading, onCreate, onJoin, onLeave, onChangeAuthor, onRefresh }) {
   const [nickname, setNickname] = useState(family.nickname || "");
   const [joinCode, setJoinCode] = useState("");
   const [copied, setCopied] = useState(false);
@@ -1263,7 +1311,7 @@ function FamilyTab({ family, familyTx, familyLoading, onCreate, onJoin, onLeave,
       <div style={{ padding: "24px 20px" }}>
         <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 6 }}>Семейный бюджет</div>
         <div style={{ fontSize: 13, color: C.textDim, marginBottom: 20 }}>
-          Ведите общий бюджет с близкими. Каждая операция остаётся личной — вы сами решаете, включать её в семейный список или нет.
+          Ведите общий бюджет с близкими. Операции синхронизируются между устройствами через Cloudflare. Каждая операция остаётся личной — вы сами решаете, включать её в семейный список или нет.
         </div>
 
         <FieldLabel>Ваше имя (будет видно другим участникам)</FieldLabel>
@@ -1315,6 +1363,15 @@ function FamilyTab({ family, familyTx, familyLoading, onCreate, onJoin, onLeave,
         </button>
       </div>
 
+      {familyMembers?.length > 0 && (
+        <div style={{ marginBottom: 18, padding: 14, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14 }}>
+          <div style={{ fontSize: 12, color: C.textFaint, marginBottom: 8 }}>Участники</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {familyMembers.map((m) => <div key={m.id} style={{ padding: "6px 9px", borderRadius: 999, background: C.surface2, border: `1px solid ${C.border}`, fontSize: 11.5 }}>{m.nickname}</div>)}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
         <StatCard icon={<TrendingUp size={16} color={C.income} />} label="Доходы семьи" value={income} color={C.income} />
         <StatCard icon={<TrendingDown size={16} color={C.expense} />} label="Расходы семьи" value={expense} color={C.expense} />
@@ -1347,13 +1404,19 @@ function FamilyTab({ family, familyTx, familyLoading, onCreate, onJoin, onLeave,
           const d = new Date(t.date);
           const isExpense = t.type === "expense";
           return (
-            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: i === recent.length - 1 ? "none" : `1px dashed ${C.borderSoft}` }}>
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderBottom: i === recent.length - 1 ? "none" : `1px dashed ${C.borderSoft}` }}>
               <div style={{ width: 30, height: 30, borderRadius: 10, background: catColor(t.category) + "26", color: catColor(t.category), display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
                 {t.category?.[0]?.toUpperCase()}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{t.category}</div>
-                <div style={{ fontSize: 11.5, color: C.textFaint }}>{t.nickname} · {d.toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}</div>
+                <div style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>{new Date(t.date).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}</div>
+                {familyMembers?.length > 0 ? (
+                  <select value={t.authorId || familyMembers.find((m) => m.nickname === t.nickname)?.id || ""} onChange={(e) => onChangeAuthor(t.id, e.target.value)}
+                    style={{ marginTop: 6, maxWidth: 160, background: C.surface2, color: C.textDim, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 7px", fontSize: 11.5 }}>
+                    {familyMembers.map((m) => <option key={m.id} value={m.id}>{m.nickname}</option>)}
+                  </select>
+                ) : <div style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>{t.nickname}</div>}
               </div>
               <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: isExpense ? C.expense : C.income, flexShrink: 0 }}>
                 {isExpense ? "−" : "+"}{fmt(t.amount)} ₽
@@ -1371,7 +1434,7 @@ function BottomNav({ tab, setTab }) {
   return (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center" }}>
       <div style={{
-        width: "100%", maxWidth: 460, background: "rgba(21,23,28,0.92)", backdropFilter: "blur(12px)",
+        width: "100%", maxWidth: 460, background: "rgba(28,28,30,0.88)", backdropFilter: "saturate(180%) blur(24px)", WebkitBackdropFilter: "saturate(180%) blur(24px)",
         borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-around",
         padding: "8px 8px calc(env(safe-area-inset-bottom, 8px) + 6px)",
       }}>
@@ -1379,7 +1442,7 @@ function BottomNav({ tab, setTab }) {
         <NavItem icon={<Search size={19} />} label="История" active={tab === "history"} onClick={() => setTab("history")} />
         <button onClick={() => setTab("add")} style={{
           width: 52, height: 52, borderRadius: 99, border: "none", background: C.gold, display: "flex",
-          alignItems: "center", justifyContent: "center", marginTop: -24, boxShadow: "0 6px 18px rgba(242,200,121,0.35)", cursor: "pointer", flexShrink: 0,
+          alignItems: "center", justifyContent: "center", marginTop: -24, boxShadow: "0 8px 24px rgba(10,132,255,0.28), inset 0 1px 0 rgba(255,255,255,0.18)", cursor: "pointer", flexShrink: 0,
         }}>
           <Plus size={22} color="#0B0C10" strokeWidth={2.5} />
         </button>

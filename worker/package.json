@@ -2,11 +2,6 @@
   "name": "wallet-ai-worker",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
-  },
-  "devDependencies": {
-    "wrangler": "latest"
-  }
+  "scripts": { "deploy": "wrangler deploy", "dev": "wrangler dev" },
+  "devDependencies": { "wrangler": "latest" }
 }
